@@ -1,0 +1,14 @@
+{
+  "sampleMaterials": [
+    {
+      "name": "algebra-syllabus.txt",
+      "type": "syllabus",
+      "text": "Quadratic equations and factorization are core algebra topics. Students should solve equations by factoring, completing the square, and using the quadratic formula. Functions, domain, and range are key range-check skills for exams."
+    },
+    {
+      "name": "biology-notes.txt",
+      "type": "notes",
+      "text": "Genetics includes dominant and recessive traits. Meiosis halves the chromosome number and produces haploid cells. Cell division and human physiology are important exam topics."
+    }
+  ]
+}

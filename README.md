@@ -1,36 +1,117 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# GapFinder AI
 
-## Getting Started
+GapFinder AI is an AI-powered learning platform built to diagnose student knowledge gaps, generate grounded quizzes, explain topics using uploaded study material, and produce personalized revision plans.
 
-First, run the development server:
+## What this project includes
+
+- Landing page and auth flows for demo login/signup
+- Student dashboard with saved metrics and analytics
+- Material upload for PDF and TXT study content
+- Topic map and exam-topic prioritization
+- RAG-style retrieval backed by uploaded study content
+- Diagnostic quiz generation with citations and topic mapping
+- Answer evaluation and knowledge-gap analysis
+- Personalized revision planning
+- Explain-this-topic assistant grounded in uploaded material
+- Progress tracking and saved history in local demo storage
+
+## Technology stack
+
+- Next.js App Router
+- React + TypeScript
+- Tailwind CSS
+- Recharts
+- Lucide React
+- Supabase-ready database schema
+- Groq API integration with a fallback grounded retrieval path
+- PDF text extraction for uploaded documents
+
+## How retrieval and grounding work
+
+1. Uploaded material is parsed and chunked.
+2. Relevant chunks are matched against the student question using keyword overlap.
+3. The retrieval step filters to relevant content in the uploaded study material.
+4. Generation only uses the retrieved material context.
+5. Source citations are returned with each answer.
+6. If the material does not contain enough evidence, the app answers with a clear insufficiency message.
+
+## Local setup
+
+1. Install dependencies:
+
+```bash
+npm install
+```
+
+2. Copy the sample env file:
+
+```bash
+cp .env.example .env.local
+```
+
+3. Fill in the required values for Supabase and Groq.
+
+4. Start the app:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+5. Open http://localhost:3000
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Demo credentials
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+This project includes a demo login flow and uses localStorage for demonstration. You can log in with:
 
-## Learn More
+- Email: aarav@demo.com
+- Password: demo-password
 
-To learn more about Next.js, take a look at the following resources:
+## Demo data
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+A sample data generation script is available at:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+node scripts/generate-demo-data.mjs
+```
 
-## Deploy on Vercel
+This creates a JSON file in the `demo-data` folder.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Database setup
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Use the SQL in `supabase/schema.sql` in a Supabase project. It includes:
+
+- profiles
+- documents
+- document_chunks
+- topics
+- questions
+- quizzes
+- quiz_attempts
+- student_answers
+- topic_performance
+- revision_plans
+- revision_tasks
+- chat_history
+
+It also includes pgvector support and row level security policies.
+
+## Production build and validation
+
+Run:
+
+```bash
+npm run lint
+npm run build
+```
+
+## Vercel deployment
+
+1. Push the repository to GitHub.
+2. Import the project into Vercel.
+3. Add the environment variables from `.env.example`.
+4. Set the build command to `npm run build`.
+5. Deploy and verify the production build.
+
+## Limitations
+
+This version is a production-style demo designed to run without live Supabase credentials or a real Groq account. When credentials are configured, it is ready to use the real services while preserving the same data flow.
