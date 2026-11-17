@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 import { defaultProfile, saveToStorage } from "@/lib/logic";
+import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/browser-api";
 
 const demoEmail = "aarav@demo.com";
 const demoPassword = "demo-password";
@@ -13,16 +14,35 @@ export default function LoginPage() {
   const [email, setEmail] = useState(demoEmail);
   const [password, setPassword] = useState(demoPassword);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (event: FormEvent) => {
+  const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (email.trim().toLowerCase() !== demoEmail || password !== demoPassword) {
-      setError("Use the demo email and password shown below.");
-      return;
+    setError("");
+    setLoading(true);
+    try {
+      if (isSupabaseConfigured()) {
+        const { data, error: authError } = await getSupabaseBrowserClient().auth.signInWithPassword({ email: email.trim(), password });
+        if (authError) throw authError;
+        if (!data.user) throw new Error("Supabase did not return an authenticated user.");
+        saveToStorage("profile", {
+          ...defaultProfile,
+          id: data.user.id,
+          email: data.user.email ?? email.trim(),
+          fullName: data.user.user_metadata.full_name ?? email.trim().split("@")[0],
+        });
+      } else {
+        if (email.trim().toLowerCase() !== demoEmail || password !== demoPassword) {
+          throw new Error("Use the demo email and password shown below.");
+        }
+        saveToStorage("profile", defaultProfile);
+      }
+      router.push("/dashboard");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not log in.");
+    } finally {
+      setLoading(false);
     }
-
-    saveToStorage("profile", defaultProfile);
-    router.push("/dashboard");
   };
 
   return (
@@ -44,12 +64,14 @@ export default function LoginPage() {
             <input id="password" type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5" />
           </div>
           {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-          <button type="submit" className="w-full rounded-xl bg-indigo-600 px-4 py-3 font-semibold text-white transition hover:bg-indigo-500">Log in</button>
+          <button type="submit" disabled={loading} className="w-full rounded-xl bg-indigo-600 px-4 py-3 font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-60">{loading ? "Logging in…" : "Log in"}</button>
         </form>
 
-        <p className="mt-5 rounded-xl bg-indigo-50 p-3 text-sm text-indigo-800">
-          Demo credentials: <strong>{demoEmail}</strong> / <strong>{demoPassword}</strong>
-        </p>
+        {!isSupabaseConfigured() ? (
+          <p className="mt-5 rounded-xl bg-indigo-50 p-3 text-sm text-indigo-800">
+            Demo credentials: <strong>{demoEmail}</strong> / <strong>{demoPassword}</strong>
+          </p>
+        ) : null}
         <div className="mt-6 text-center text-sm text-slate-500">
           New here? <Link href="/signup" className="font-semibold text-indigo-600">Create an account</Link>
         </div>

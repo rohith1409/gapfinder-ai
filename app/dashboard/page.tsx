@@ -1,31 +1,72 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { BarChart3, BookOpen, CircleDashed, PencilLine, TrendingUp, Users } from "lucide-react";
+import { useEffect, useState } from "react";
+import { BarChart3, BookOpen, CircleDashed, PencilLine, TrendingUp } from "lucide-react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { AppShell } from "@/components/app-shell";
-import { getDemoMaterials, getDemoQuizHistory, summarizeDashboard } from "@/lib/logic";
+import { defaultMaterials } from "@/lib/logic";
+import type { RevisionTask, TopicPerformance } from "@/lib/types";
+import { apiFetch, isSupabaseConfigured } from "@/lib/browser-api";
+import { useLocalStorageValue } from "@/lib/use-storage";
 
-const defaultTrend = [
-  { name: "Attempt 1", score: 45 },
-  { name: "Attempt 2", score: 62 },
-  { name: "Attempt 3", score: 73 },
-];
+type Attempt = { id: string; title: string; score: number; createdAt: string };
+type DashboardData = {
+  totalMaterials: number;
+  totalQuizzes: number;
+  overall: number | null;
+  weakTopics: number;
+  latestTopics: Array<Pick<TopicPerformance, "topic" | "score" | "status" | "diagnosis" | "recommendedAction">>;
+  recentAttempts: Attempt[];
+  trend: Array<{ name: string; score: number }>;
+  upcomingTasks: Array<{ id: string; day: number; topic: string; detail: string }>;
+};
 
 export default function DashboardPage() {
-  const [materials] = useState<ReturnType<typeof getDemoMaterials>>(() => getDemoMaterials());
-  const [quizHistory] = useState<ReturnType<typeof getDemoQuizHistory>>(() => getDemoQuizHistory());
+  const [cloudData, setCloudData] = useState<DashboardData | null>(null);
+  const materials = useLocalStorageValue("materials", defaultMaterials);
+  const attempts = useLocalStorageValue<Attempt[]>("attempt-history", []);
+  const topics = useLocalStorageValue<TopicPerformance[]>("latest-gap-report", []);
+  const tasks = useLocalStorageValue<RevisionTask[]>("revision-plan", []);
+  const localData: DashboardData = {
+    totalMaterials: materials.length,
+    totalQuizzes: attempts.length,
+    overall: attempts.length ? Math.round(attempts.reduce((sum, attempt) => sum + attempt.score, 0) / attempts.length) : null,
+    weakTopics: topics.filter((topic) => topic.status === "Weak").length,
+    latestTopics: topics,
+    recentAttempts: attempts.slice(0, 10),
+    trend: attempts.slice(0, 10).reverse().map((attempt, index) => ({ name: `Attempt ${index + 1}`, score: attempt.score })),
+    upcomingTasks: tasks.filter((task) => !task.completed).slice(0, 5).map((task) => ({
+      id: task.id, day: task.day, topic: task.topic, detail: task.subtopic || task.activity,
+    })),
+  };
+  const data = isSupabaseConfigured() ? cloudData ?? {
+    totalMaterials: 0,
+    totalQuizzes: 0,
+    overall: null,
+    weakTopics: 0,
+    latestTopics: [],
+    recentAttempts: [],
+    trend: [],
+    upcomingTasks: [],
+  } : localData;
+  const [error, setError] = useState("");
 
-  const summary = useMemo(() => summarizeDashboard(materials, quizHistory, []), [materials, quizHistory]);
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    apiFetch<DashboardData>("/api/dashboard")
+      .then(setCloudData)
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Could not load dashboard data."));
+  }, []);
 
   return (
     <AppShell title="Dashboard">
+      {error && <p role="alert" className="mb-4 text-sm text-red-600">{error}</p>}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
-          { label: "Study materials", value: summary.totalMaterials, icon: BookOpen, className: "bg-indigo-100 text-indigo-700" },
-          { label: "Quizzes completed", value: summary.totalQuizzes, icon: PencilLine, className: "bg-sky-100 text-sky-700" },
-          { label: "Overall performance", value: `${summary.overall}%`, icon: TrendingUp, className: "bg-emerald-100 text-emerald-700" },
-          { label: "Weak topics", value: summary.weakTopics, icon: CircleDashed, className: "bg-red-100 text-red-700" },
+          { label: "Study materials", value: data.totalMaterials, icon: BookOpen, className: "bg-indigo-100 text-indigo-700" },
+          { label: "Quizzes completed", value: data.totalQuizzes, icon: PencilLine, className: "bg-sky-100 text-sky-700" },
+          { label: "Overall performance", value: data.overall === null ? "—" : `${data.overall}%`, icon: TrendingUp, className: "bg-emerald-100 text-emerald-700" },
+          { label: "Weak topics", value: data.weakTopics, icon: CircleDashed, className: "bg-red-100 text-red-700" },
         ].map(({ label, value, icon: Icon, className }) => (
           <div key={label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between">
@@ -47,7 +88,7 @@ export default function DashboardPage() {
           </div>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={defaultTrend}>
+              <LineChart data={data.trend}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis dataKey="name" tickLine={false} axisLine={false} />
                 <YAxis domain={[0, 100]} tickLine={false} axisLine={false} />
@@ -55,24 +96,35 @@ export default function DashboardPage() {
                 <Line type="monotone" dataKey="score" stroke="#4f46e5" strokeWidth={3} dot={{ r: 5 }} />
               </LineChart>
             </ResponsiveContainer>
+            {!data.trend.length && <div className="mt-2 text-center text-sm text-slate-500">Complete a quiz to see your progress trend.</div>}
           </div>
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-lg font-semibold">Quick insights</h2>
           <div className="mt-5 space-y-4">
-            <div className="rounded-xl bg-emerald-50 p-4">
-              <div className="text-sm text-emerald-700">Strong topic</div>
-              <div className="mt-2 font-semibold">Physics</div>
-            </div>
-            <div className="rounded-xl bg-amber-50 p-4">
-              <div className="text-sm text-amber-700">Needs attention</div>
-              <div className="mt-2 font-semibold">Algebra</div>
-            </div>
-            <div className="rounded-xl bg-indigo-50 p-4">
-              <div className="text-sm text-indigo-700">Next revision</div>
-              <div className="mt-2 font-semibold">Quadratic equations</div>
-            </div>
+            {data.latestTopics.length ? (
+              <>
+                {data.latestTopics.filter((topic) => topic.status === "Strong").slice(0, 1).map((topic) => (
+                  <div key={topic.topic} className="rounded-xl bg-emerald-50 p-4">
+                    <div className="text-sm text-emerald-700">Strong topic</div>
+                    <div className="mt-2 font-semibold">{topic.topic}</div>
+                  </div>
+                ))}
+                {data.latestTopics.filter((topic) => topic.status === "Weak").sort((a, b) => a.score - b.score).slice(0, 1).map((topic) => (
+                  <div key={topic.topic} className="rounded-xl bg-amber-50 p-4">
+                    <div className="text-sm text-amber-700">Needs attention</div>
+                    <div className="mt-2 font-semibold">{topic.topic}</div>
+                  </div>
+                ))}
+              </>
+            ) : <p className="text-sm text-slate-500">Topic insights will appear after your first quiz.</p>}
+            {data.upcomingTasks.slice(0, 1).map((task) => (
+              <div key={task.id} className="rounded-xl bg-indigo-50 p-4">
+                <div className="text-sm text-indigo-700">Next revision</div>
+                <div className="mt-2 font-semibold">{task.topic}</div>
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -81,13 +133,13 @@ export default function DashboardPage() {
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-lg font-semibold">Recent quiz attempts</h2>
           <div className="mt-4 space-y-3">
-            {quizHistory.length ? quizHistory.slice(0, 3).map((entry) => (
+            {data.recentAttempts.length ? data.recentAttempts.slice(0, 3).map((entry) => (
               <div key={entry.id} className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 p-3">
                 <div>
                   <div className="font-medium">{entry.title}</div>
                   <div className="text-sm text-slate-500">{new Date(entry.createdAt).toLocaleDateString()}</div>
                 </div>
-                <div className="rounded-full bg-indigo-100 px-2.5 py-1 text-sm font-semibold text-indigo-700">{Math.round(entry.questions.reduce((total, q) => total + (q.correctAnswer ? 100 : 0), 0) / entry.questions.length)}%</div>
+                <div className="rounded-full bg-indigo-100 px-2.5 py-1 text-sm font-semibold text-indigo-700">{entry.score}%</div>
               </div>
             )) : (
               <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-500">No quizzes yet. Generate a diagnostic quiz to start seeing progress.</div>
@@ -98,18 +150,13 @@ export default function DashboardPage() {
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-lg font-semibold">Upcoming revision tasks</h2>
           <div className="mt-4 space-y-3">
-            {materials.length ? (
-              [
-                { topic: "Algebra", day: 1, detail: "Factorization practice" },
-                { topic: "Biology", day: 2, detail: "Genetics recall" },
-                { topic: "Physics", day: 3, detail: "Motion formulas" },
-              ].map((task) => (
+            {data.upcomingTasks.length ? (
+              data.upcomingTasks.slice(0, 3).map((task) => (
                 <div key={task.topic} className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <div>
                     <div className="font-medium">{task.topic}</div>
                     <div className="text-sm text-slate-500">Day {task.day} · {task.detail}</div>
                   </div>
-                  <Users size={16} className="text-slate-400" />
                 </div>
               ))
             ) : (

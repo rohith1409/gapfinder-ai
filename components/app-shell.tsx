@@ -4,7 +4,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { BookOpenText, GraduationCap, LayoutDashboard, LogOut, MessageSquareText, PencilLine, Sparkles, UploadCloud } from "lucide-react";
-import { getDemoProfile, loadFromStorage } from "@/lib/logic";
+import { defaultProfile } from "@/lib/logic";
+import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/browser-api";
+import { useLocalStorageValue } from "@/lib/use-storage";
 import type { StudentProfile } from "@/lib/types";
 
 const navItems = [
@@ -19,9 +21,18 @@ const navItems = [
 
 export function AppShell({ children, title }: { children: React.ReactNode; title: string }) {
   const router = useRouter();
-  const [profile] = useState<StudentProfile | null>(() => loadFromStorage("profile", getDemoProfile()));
+  const profile = useLocalStorageValue<StudentProfile | null>("profile", defaultProfile);
+  const [error, setError] = useState("");
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    setError("");
+    if (isSupabaseConfigured()) {
+      const { error: authError } = await getSupabaseBrowserClient().auth.signOut();
+      if (authError) {
+        setError(`Could not sign out: ${authError.message}`);
+        return;
+      }
+    }
     if (typeof window !== "undefined") {
       window.localStorage.removeItem("gapfinder:profile");
       router.push("/login");
@@ -63,6 +74,7 @@ export function AppShell({ children, title }: { children: React.ReactNode; title
             </button>
           </div>
         </div>
+        {error && <p role="alert" className="mx-auto max-w-7xl px-4 pb-3 text-sm text-red-600 sm:px-6">{error}</p>}
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">

@@ -1,18 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo } from "react";
 import { AppShell } from "@/components/app-shell";
-import { buildGapReport, loadFromStorage } from "@/lib/logic";
+import { buildGapReport } from "@/lib/logic";
 import type { Quiz, StudentAnswer, TopicPerformance } from "@/lib/types";
+import { useLocalStorageValue } from "@/lib/use-storage";
 
 export default function ResultsPage() {
-  const [latestQuiz] = useState<Quiz | null>(() => loadFromStorage<Quiz | null>("latest-quiz", null));
-  const [latestAnswers] = useState<StudentAnswer[]>(() => loadFromStorage<StudentAnswer[]>("latest-answers", []));
-  const [gapReport] = useState<TopicPerformance[]>(() => {
-    const report = loadFromStorage<TopicPerformance[]>("latest-gap-report", []);
-    return report.length ? report : buildGapReport(latestQuiz ?? { id: "demo", title: "Diagnostic Quiz", createdAt: "2026-11-17T00:00:00.000Z", studentId: "demo", questions: [] }, latestAnswers);
-  });
+  const quiz = useLocalStorageValue<Quiz | null>("latest-quiz", null);
+  const answers = useLocalStorageValue<StudentAnswer[]>("latest-answers", []);
+  const storedReport = useLocalStorageValue<TopicPerformance[]>("latest-gap-report", []);
+  const gapReport = useMemo(() => storedReport.length
+    ? storedReport
+    : buildGapReport(quiz ?? { id: "demo", title: "Diagnostic Quiz", createdAt: "2026-11-17T00:00:00.000Z", studentId: "demo", questions: [] }, answers),
+  [storedReport, quiz, answers]);
 
   return (
     <AppShell title="Results and gap analysis">
@@ -26,6 +28,11 @@ export default function ResultsPage() {
               }`}>{topic.status}</span>
             </div>
             <div className="mt-4 text-3xl font-bold">{topic.score}%</div>
+            {topic.improvement !== undefined && (
+              <p className={`mt-1 text-sm font-medium ${topic.improvement >= 0 ? "text-emerald-700" : "text-red-700"}`}>
+                {topic.improvement >= 0 ? "+" : ""}{topic.improvement} percentage points since your previous attempt
+              </p>
+            )}
             <p className="mt-3 text-sm text-slate-600">{topic.diagnosis}</p>
             <div className="mt-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-700">{topic.recommendedAction}</div>
           </div>

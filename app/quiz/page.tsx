@@ -3,22 +3,44 @@
 import Link from "next/link";
 import { useState } from "react";
 import { AppShell } from "@/components/app-shell";
-import { generateQuizFromMaterials, getDemoMaterials, saveToStorage } from "@/lib/logic";
+import { defaultMaterials, generateQuizFromMaterials, saveToStorage } from "@/lib/logic";
 import type { Quiz } from "@/lib/types";
+import { apiFetch, isSupabaseConfigured } from "@/lib/browser-api";
+import { useLocalStorageValue } from "@/lib/use-storage";
 
 export default function QuizPage() {
   const [difficulty, setDifficulty] = useState("Medium");
-  const [quiz, setQuiz] = useState<Quiz>(() => {
-    const nextQuiz = generateQuizFromMaterials(getDemoMaterials(), 4, "Medium");
-    saveToStorage("current-quiz", nextQuiz);
-    return nextQuiz;
-  });
+  const [generatedQuiz, setGeneratedQuiz] = useState<Quiz | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState("");
+  const materials = useLocalStorageValue("materials", defaultMaterials);
+  const quiz = generatedQuiz ?? (isSupabaseConfigured() ? null : generateQuizFromMaterials(materials, 4, difficulty as "Easy" | "Medium" | "Hard"));
 
-  const handleDifficultyChange = (value: string) => {
-    setDifficulty(value);
-    const nextQuiz = generateQuizFromMaterials(getDemoMaterials(), 4, value as "Easy" | "Medium" | "Hard");
-    setQuiz(nextQuiz);
-    saveToStorage("current-quiz", nextQuiz);
+  const generateQuiz = async () => {
+    setError("");
+    setGenerating(true);
+    try {
+      let nextQuiz: Quiz;
+      if (isSupabaseConfigured()) {
+        const response = await apiFetch<{ quiz: Quiz }>("/api/quiz/generate", {
+          method: "POST",
+          body: JSON.stringify({ difficulty, count: 8 }),
+        });
+        nextQuiz = response.quiz;
+      } else {
+        nextQuiz = generateQuizFromMaterials(materials, 4, difficulty as "Easy" | "Medium" | "Hard");
+      }
+      setGeneratedQuiz(nextQuiz);
+      saveToStorage("current-quiz", nextQuiz);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not generate the quiz.");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const startQuiz = () => {
+    if (quiz) saveToStorage("current-quiz", quiz);
   };
 
   return (
@@ -31,12 +53,18 @@ export default function QuizPage() {
           </div>
           <div className="flex items-center gap-3">
             <label className="text-sm font-medium text-slate-600">Difficulty</label>
-            <select value={difficulty} onChange={(event) => handleDifficultyChange(event.target.value)} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <select value={difficulty} onChange={(event) => { setDifficulty(event.target.value); setGeneratedQuiz(null); }} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
               <option>Easy</option>
               <option>Medium</option>
               <option>Hard</option>
             </select>
           </div>
+        </div>
+        <div className="mt-5 flex items-center gap-3">
+          <button type="button" onClick={generateQuiz} disabled={generating} className="rounded-full bg-indigo-600 px-5 py-3 font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-60">
+            {generating ? "Generating…" : "Generate quiz"}
+          </button>
+          {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
         </div>
 
         {quiz ? (
@@ -55,7 +83,7 @@ export default function QuizPage() {
               ))}
             </div>
             <div className="flex justify-end">
-              <Link href={`/quiz/${quiz.id}`} className="rounded-full bg-indigo-600 px-5 py-3 font-semibold text-white transition hover:bg-indigo-500">
+              <Link href={`/quiz/${quiz.id}`} onClick={startQuiz} className="rounded-full bg-indigo-600 px-5 py-3 font-semibold text-white transition hover:bg-indigo-500">
                 Start quiz
               </Link>
             </div>

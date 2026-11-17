@@ -4,15 +4,43 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 import { defaultProfile, saveToStorage } from "@/lib/logic";
+import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/browser-api";
 
 export default function SignupPage() {
   const router = useRouter();
   const [form, setForm] = useState({ fullName: "Aarav Sharma", email: "aarav@demo.com", password: "demo-password" });
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (event: FormEvent) => {
+  const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    saveToStorage("profile", { ...defaultProfile, ...form });
-    router.push("/dashboard");
+    setError("");
+    setMessage("");
+    setLoading(true);
+    try {
+      if (isSupabaseConfigured()) {
+        const { data, error: authError } = await getSupabaseBrowserClient().auth.signUp({
+          email: form.email.trim(),
+          password: form.password,
+          options: { data: { full_name: form.fullName.trim() } },
+        });
+        if (authError) throw authError;
+        if (!data.session) {
+          setMessage("Account created. Check your email to confirm the account, then log in.");
+          return;
+        }
+        if (!data.user) throw new Error("Supabase did not return the created user.");
+        saveToStorage("profile", { ...defaultProfile, id: data.user.id, email: data.user.email ?? form.email, fullName: form.fullName });
+      } else {
+        saveToStorage("profile", { ...defaultProfile, ...form });
+      }
+      router.push("/dashboard");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not create the account.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -37,7 +65,9 @@ export default function SignupPage() {
             <label className="mb-1 block text-sm font-medium text-slate-700">Password</label>
             <input type="password" value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5" />
           </div>
-          <button type="submit" className="w-full rounded-xl bg-indigo-600 px-4 py-3 font-semibold text-white transition hover:bg-indigo-500">Sign up</button>
+          {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+          {message && <p role="status" className="text-sm text-emerald-700">{message}</p>}
+          <button type="submit" disabled={loading} className="w-full rounded-xl bg-indigo-600 px-4 py-3 font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-60">{loading ? "Creating account…" : "Sign up"}</button>
         </form>
 
         <div className="mt-6 text-center text-sm text-slate-500">

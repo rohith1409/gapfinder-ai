@@ -1,28 +1,49 @@
 "use client";
 
-import { ChangeEvent, useState } from "react";
+import { ChangeEvent, useEffect, useState } from "react";
 import { FileText, Trash2, UploadCloud } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
-import { chunkText, extractTextFromFile, getDemoMaterials, saveToStorage } from "@/lib/logic";
+import { chunkText, defaultMaterials, extractTextFromFile, saveToStorage } from "@/lib/logic";
 import type { StudyMaterial } from "@/lib/types";
+import { apiFetch, isSupabaseConfigured } from "@/lib/browser-api";
+import { useLocalStorageValue } from "@/lib/use-storage";
 
 export default function MaterialsPage() {
-  const [materials, setMaterials] = useState<StudyMaterial[]>(() => getDemoMaterials());
+  const [cloudMaterials, setCloudMaterials] = useState<StudyMaterial[]>([]);
+  const demoMaterials = useLocalStorageValue("materials", defaultMaterials);
+  const materials = isSupabaseConfigured() ? cloudMaterials : demoMaterials;
   const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    apiFetch<{ materials: StudyMaterial[] | null }>("/api/materials")
+      .then((response) => {
+        if (response.materials) setCloudMaterials(response.materials);
+      })
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Could not load cloud materials."));
+  }, []);
 
   const handleFiles = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     if (!files.length) return;
 
     setUploading(true);
-
-    const processed = await Promise.all(
-      files.map(async (file) => {
+    setError("");
+    const processed: StudyMaterial[] = [];
+    try {
+      for (const file of files) {
+        const maxUploadMb = Number(process.env.NEXT_PUBLIC_MAX_UPLOAD_SIZE_MB) || 10;
+        if (file.size > maxUploadMb * 1024 * 1024) {
+          throw new Error(`${file.name} exceeds the ${maxUploadMb} MB upload limit.`);
+        }
+        if (!/\.(pdf|txt)$/i.test(file.name)) throw new Error(`${file.name} is not a supported PDF or TXT file.`);
         const text = await extractTextFromFile(file);
-        const chunks = chunkText(text, file.name.replace(/\.[^/.]+$/, ""));
-
-        return {
-          id: `${Date.now()}-${file.name}`,
+        const chunks = chunkText(text, file.name.replace(/\.[^/.]+$/, ""), file.name);
+        if (!chunks.length) throw new Error(`No readable text was extracted from ${file.name}.`);
+        if (chunks.length > 2000) throw new Error(`${file.name} produced more than 2,000 chunks. Split the document before uploading.`);
+        const material: StudyMaterial = {
+          id: crypto.randomUUID(),
           name: file.name,
           type: file.name.toLowerCase().endsWith(".pdf") ? "pdf" : "txt",
           uploadDate: new Date().toISOString(),
@@ -30,21 +51,43 @@ export default function MaterialsPage() {
           size: file.size,
           text,
           chunks,
-        } satisfies StudyMaterial;
-      }),
-    );
+        };
+        if (isSupabaseConfigured()) {
+          const saved = await apiFetch<{ id: string }>("/api/materials", {
+            method: "POST",
+            body: JSON.stringify(material),
+          });
+          material.id = saved.id;
+        }
+        processed.push(material);
+      }
 
-    const updated = [...materials, ...processed];
-    setMaterials(updated);
-    saveToStorage("materials", updated);
-    setUploading(false);
-    event.target.value = "";
+      const updated = [...materials, ...processed];
+      if (isSupabaseConfigured()) setCloudMaterials(updated);
+      else saveToStorage("materials", updated);
+    } catch (cause) {
+      if (processed.length) {
+        const updated = [...materials, ...processed];
+        if (isSupabaseConfigured()) setCloudMaterials(updated);
+        else saveToStorage("materials", updated);
+      }
+      setError(cause instanceof Error ? cause.message : "Could not process the selected files.");
+    } finally {
+      setUploading(false);
+      event.target.value = "";
+    }
   };
 
-  const deleteMaterial = (id: string) => {
-    const next = materials.filter((material) => material.id !== id);
-    setMaterials(next);
-    saveToStorage("materials", next);
+  const deleteMaterial = async (id: string) => {
+    setError("");
+    try {
+      if (isSupabaseConfigured()) await apiFetch("/api/materials", { method: "DELETE", body: JSON.stringify({ id }) });
+      const next = materials.filter((material) => material.id !== id);
+      if (isSupabaseConfigured()) setCloudMaterials(next);
+      else saveToStorage("materials", next);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not delete the material.");
+    }
   };
 
   return (
@@ -55,6 +98,7 @@ export default function MaterialsPage() {
         </div>
         <h2 className="text-2xl font-semibold">Upload syllabus, notes, and past papers</h2>
         <p className="mt-2 text-slate-500">PDF and TXT supported. Large files are chunked and indexed for retrieval.</p>
+        {error && <p role="alert" className="mt-4 text-sm text-red-600">{error}</p>}
         <label className="mt-6 inline-flex cursor-pointer items-center rounded-full bg-indigo-600 px-5 py-3 font-semibold text-white transition hover:bg-indigo-500">
           {uploading ? "Processing..." : "Choose files"}
           <input type="file" accept=".pdf,.txt" multiple className="hidden" onChange={handleFiles} disabled={uploading} />

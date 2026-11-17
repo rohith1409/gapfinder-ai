@@ -24,6 +24,7 @@ export function loadFromStorage<T>(key: string, fallback: T): T {
 export function saveToStorage<T>(key: string, value: T) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(getStorageKey(key), JSON.stringify(value));
+  window.dispatchEvent(new Event("gapfinder:storage"));
 }
 
 export function getDemoProfile(): StudentProfile {
@@ -60,8 +61,8 @@ export function ensureDemoData() {
 }
 
 export function classifyScore(score: number): "Weak" | "Medium" | "Strong" {
-  if (score <= 40) return "Weak";
-  if (score <= 75) return "Medium";
+  if (score < 50) return "Weak";
+  if (score < 80) return "Medium";
   return "Strong";
 }
 
@@ -70,45 +71,82 @@ export function extractTextFromFile(file: File): Promise<string> {
 }
 
 async function extractPdfText(file: File): Promise<string> {
-  try {
-    const pdfjs = await import("pdfjs-dist");
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
-    const pages: string[] = [];
+  const pdfjs = await import("pdfjs-dist");
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+  const pages: string[] = [];
 
-    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-      const page = await pdf.getPage(pageNumber);
-      const content = await page.getTextContent();
-      const text = content.items
-        .map((item) => ("str" in item ? item.str : ""))
-        .join(" ");
-      pages.push(text);
-    }
-
-    return pages.join("\n\n");
-  } catch {
-    return `PDF uploaded: ${file.name}. A production implementation would extract the full text via PDF parsing; in demo mode this file has been indexed as study material for analysis.`;
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const text = content.items
+      .map((item) => ("str" in item ? item.str : ""))
+      .join(" ");
+    pages.push(text);
   }
+
+  const extracted = pages.join("\f");
+  if (!extracted.trim()) throw new Error(`No selectable text was found in ${file.name}. Scanned PDF OCR is not supported.`);
+  return extracted;
 }
 
-export function chunkText(text: string, topic = "General"): MaterialChunk[] {
-  const cleanText = text.replace(/\s+/g, " ").trim();
-  const sentences = cleanText.split(/(?<=[.!?])\s+/);
+export function chunkText(text: string, topic = "General", source = "Imported document"): MaterialChunk[] {
+  const pages = text.split("\f");
   const chunks: MaterialChunk[] = [];
+  let chunkIndex = 0;
 
-  sentences.forEach((sentence, index) => {
-    if (!sentence.trim()) return;
-    chunks.push({
-      id: `chunk-${topic.toLowerCase().replace(/\s+/g, "-")}-${index + 1}`,
-      content: sentence.trim(),
-      source: "Imported document",
-      page: index + 1,
-      section: "Imported section",
-      topic,
-    });
+  pages.forEach((pageText, pageIndex) => {
+    const lines = pageText.split(/\r?\n/);
+    let section = "";
+    let buffer: string[] = [];
+    let length = 0;
+
+    const flush = () => {
+      const content = buffer.join(" ").trim();
+      if (!content) return;
+      chunkIndex += 1;
+      chunks.push({
+        id: `chunk-${topic.toLowerCase().replace(/\s+/g, "-")}-${chunkIndex}`,
+        content,
+        source,
+        ...(pages.length > 1 || source.toLowerCase().endsWith(".pdf") ? { page: pageIndex + 1 } : {}),
+        ...(section ? { section } : {}),
+        topic,
+      });
+      buffer = [];
+      length = 0;
+    };
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) {
+        flush();
+        continue;
+      }
+      if (line.length < 100 && !/[.!?]$/.test(line)) {
+        flush();
+        section = line.replace(/^#+\s*/, "");
+        continue;
+      }
+      const sentences = line.split(/(?<=[.!?])\s+/);
+      for (const sentence of sentences) {
+        if (length + sentence.length > 800) flush();
+        buffer.push(sentence);
+        length += sentence.length;
+      }
+    }
+    flush();
   });
 
-  return chunks.length ? chunks : [{ id: `chunk-${topic.toLowerCase()}`, content: cleanText, source: "Imported document", page: 1, section: "Imported section", topic }];
+  if (!chunks.length && text.trim()) {
+    chunks.push({
+      id: `chunk-${topic.toLowerCase().replace(/\s+/g, "-")}-1`,
+      content: text.trim(),
+      source,
+      topic,
+    });
+  }
+  return chunks;
 }
 
 export function buildTopicMap(materials: StudyMaterial[]) {
@@ -178,110 +216,113 @@ export function evaluateQuestion(question: QuizQuestion, answer: string): Studen
     };
   }
 
-  const keywords = question.keywords ?? [question.correctAnswer];
-  const hasEnough = keywords.some((keyword) => normalized.includes(keyword.toLowerCase()));
-  const score = hasEnough ? Math.min(100, 75 + Math.max(0, Math.min(25, (normalized.length / 100) * 20))) : 0;
+  const keywords = question.keywords ?? question.correctAnswer.toLowerCase().split(/\W+/).filter((word) => word.length > 3);
+  const matched = keywords.filter((keyword) => normalized.includes(keyword.toLowerCase())).length;
+  const score = keywords.length ? Math.round((matched / keywords.length) * 100) : 0;
+  const isCorrect = score >= 70 && normalized.length > 12;
 
   return {
     questionId: question.id,
     answer,
-    score: Number(score.toFixed(0)),
-    isCorrect: hasEnough && normalized.length > 12,
-    feedback: hasEnough ? `Strong answer. ${question.explanation}` : `Your answer is not grounded in the uploaded material enough. ${question.explanation}`,
+    score: isCorrect ? score : Math.min(score, 69),
+    isCorrect,
+    feedback: isCorrect ? `Your answer covers the key concepts. ${question.explanation}` : `Your answer missed one or more key concepts. Expected answer: ${question.correctAnswer}`,
     correctAnswer: question.correctAnswer,
   };
 }
 
 export function buildGapReport(quiz: Quiz, responses: StudentAnswer[]): TopicPerformance[] {
-  const checkpoint = new Map<string, { correct: number; total: number; difficultyBreakdown: Record<string, number>; subtopics: Map<string, number[]>; diagnosis: string; recommendedAction: string }>();
+  const checkpoint = new Map<string, { scores: number[]; correct: number; difficultyBreakdown: Record<string, number>; subtopics: Map<string, number[]>; missed: string[] }>();
 
   for (const question of quiz.questions) {
     const response = responses.find((item) => item.questionId === question.id);
     const topic = checkpoint.get(question.topic) ?? {
+      scores: [],
       correct: 0,
-      total: 0,
       difficultyBreakdown: {},
       subtopics: new Map<string, number[]>(),
-      diagnosis: "",
-      recommendedAction: "",
+      missed: [],
     };
 
-    topic.total += 1;
     topic.difficultyBreakdown[question.difficulty] = (topic.difficultyBreakdown[question.difficulty] ?? 0) + 1;
     const sub = topic.subtopics.get(question.subtopic) ?? [];
-    sub.push(response?.isCorrect ? 1 : 0);
+    const responseScore = response?.score ?? 0;
+    sub.push(responseScore);
     topic.subtopics.set(question.subtopic, sub);
-
-    if (response) {
-      topic.correct += response.isCorrect ? 1 : 0;
+    topic.scores.push(responseScore);
+    if (response && response.score >= 70) {
+      topic.correct += 1;
+    } else {
+      topic.missed.push(question.subtopic || question.text);
     }
-
     checkpoint.set(question.topic, topic);
   }
 
   return Array.from(checkpoint.entries()).map(([topicName, stats]) => {
-    const score = Math.round((stats.correct / stats.total) * 100);
+    const score = stats.scores.length ? Math.round(stats.scores.reduce((sum, value) => sum + value, 0) / stats.scores.length) : 0;
     const status = classifyScore(score);
     const subtopics = Array.from(stats.subtopics.entries()).map(([name, values]) => {
-      const subScore = Math.round((values.filter(Boolean).length / values.length) * 100);
+      const subScore = values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length) : 0;
       return { name, score: subScore, status: classifyScore(subScore) };
     });
 
     const diagnosis =
       status === "Weak"
-        ? `${topicName} needs reinforcement. The majority of mistakes are concentrated in problem-solving steps and recall gaps.`
+        ? `${topicName} needs reinforcement. Review ${[...new Set(stats.missed)].join(", ") || "the missed questions"} based on this attempt.`
         : status === "Medium"
-          ? `${topicName} is partly understood. A few errors suggest partial concept mastery that can improve with focused practice.`
-          : `${topicName} is a strong area. Consistent accuracy shows solid concept retention and fast recall.`;
+          ? `${topicName} is partly understood. Focus next on ${[...new Set(stats.missed)].join(", ") || "the questions with partial credit"}.`
+          : `${topicName} is currently a strength, scoring ${score}% across ${stats.scores.length} questions in this attempt.`;
 
     const recommendedAction =
       status === "Weak"
-        ? `Revise ${topicName.toLowerCase()} with five mixed practice questions and a quick recap of foundational steps.`
+        ? `Review ${[...new Set(stats.missed)].join(", ") || topicName.toLowerCase()} and complete five targeted practice questions.`
         : status === "Medium"
-          ? `Complete a short drill on ${topicName.toLowerCase()} and revisit the most error-prone subtopic.`
-          : `Maintain momentum with one timed consolidation set to keep ${topicName.toLowerCase()} strong.`;
+          ? `Complete a focused drill on ${[...new Set(stats.missed)].join(", ") || topicName.toLowerCase()}.`
+          : `Maintain this strength with one timed consolidation set for ${topicName.toLowerCase()}.`;
 
     return {
       topic: topicName,
       score,
       status,
       correct: stats.correct,
-      incorrect: stats.total - stats.correct,
-      attempts: stats.total,
+      incorrect: stats.scores.length - stats.correct,
+      attempts: stats.scores.length,
       difficultyBreakdown: stats.difficultyBreakdown,
       subtopics,
       diagnosis,
       recommendedAction,
+      importance: defaultTopics.find((topic) => topic.name === topicName)?.importance ?? 50,
     };
   });
 }
 
-export function generateRevisionPlan(profile: StudentProfile, gapReport: TopicPerformance[]): RevisionTask[] {
+export function generateRevisionPlan(profile: StudentProfile, gapReport: TopicPerformance[], previousTasks: RevisionTask[] = []): RevisionTask[] {
   const sorted = [...gapReport].sort((a, b) => {
-    if (a.status === "Weak" && b.status !== "Weak") return -1;
-    if (a.status !== "Weak" && b.status === "Weak") return 1;
-    return b.score - a.score;
+    const priority = (topic: TopicPerformance) => ((topic.importance ?? 50) / 100) * (1 - topic.score / 100);
+    return priority(b) - priority(a);
   });
 
   const tasks: RevisionTask[] = [];
   sorted.slice(0, 5).forEach((topic, index) => {
-    const subtopic = topic.subtopics[0]?.name ?? "Foundational review";
+    const weakest = [...topic.subtopics].sort((a, b) => a.score - b.score)[0];
+    const subtopic = weakest?.name ?? "Foundational review";
+    const existing = previousTasks.find((task) => task.topic === topic.topic && task.subtopic === subtopic);
     tasks.push({
-      id: `task-${index + 1}`,
+      id: existing?.id ?? `task-${index + 1}`,
       day: index + 1,
       topic: topic.topic,
       subtopic,
       duration: profile.studyHoursPerDay * 20,
       priority: topic.status === "Weak" ? "High" : topic.status === "Medium" ? "Medium" : "Low",
       activity: topic.recommendedAction,
-      completed: false,
+      completed: existing?.completed ?? false,
     });
   });
 
   return tasks;
 }
 
-export function getStudyAssistantAnswer(question: string, materials: StudyMaterial[]): { answer: string; citations: { source: string; page: number; section: string }[] } {
+export function getStudyAssistantAnswer(question: string, materials: StudyMaterial[]): { answer: string; citations: { source: string; page?: number; section?: string }[] } {
   const normalized = question.toLowerCase();
   const matchingChunks = materials.flatMap((material) =>
     material.chunks
@@ -290,6 +331,7 @@ export function getStudyAssistantAnswer(question: string, materials: StudyMateri
         return haystack.includes(normalized) || normalized.split(/\s+/).some((word) => word.length > 3 && haystack.includes(word));
       })
       .map((chunk) => ({
+        id: chunk.id,
         source: chunk.source,
         page: chunk.page,
         section: chunk.section,
@@ -304,10 +346,21 @@ export function getStudyAssistantAnswer(question: string, materials: StudyMateri
     };
   }
 
-  const top = matchingChunks.slice(0, 2);
+  const tokens = normalized.split(/\W+/).filter((word) => word.length > 2);
+  const ranked = matchingChunks
+    .map((chunk) => ({
+      ...chunk,
+      score: tokens.reduce((score, token) => score + (chunk.content.toLowerCase().includes(token) ? 1 : 0), 0),
+    }))
+    .filter((chunk) => chunk.score > 0)
+    .sort((a, b) => b.score - a.score);
+  if (!ranked.length) {
+    return { answer: "I couldn't find sufficient information about this topic in your uploaded study materials.", citations: [] };
+  }
+  const top = ranked.slice(0, 2);
   return {
     answer: `Using the uploaded material, the key point is: ${top[0].content} This is supported by the relevant sections in ${top[0].source}.`,
-    citations: top.map((item) => ({ source: item.source, page: item.page, section: item.section })),
+    citations: top.map(({ source, page, section }) => ({ source, ...(page ? { page } : {}), ...(section ? { section } : {}) })),
   };
 }
 

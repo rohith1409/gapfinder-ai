@@ -15,8 +15,10 @@ export interface StudentProfile {
 
 export interface SourceCitation {
   source: string;
-  page: number;
-  section: string;
+  documentId?: string;
+  chunkId?: string;
+  page?: number;
+  section?: string;
 }
 
 export interface QuizQuestion {
@@ -31,6 +33,7 @@ export interface QuizQuestion {
   explanation: string;
   citations: SourceCitation[];
   keywords?: string[];
+  sourceChunkIds?: string[];
 }
 
 export interface Quiz {
@@ -65,14 +68,17 @@ export interface TopicPerformance {
   }>;
   diagnosis: string;
   recommendedAction: string;
+  importance?: number;
+  previousScore?: number;
+  improvement?: number;
 }
 
 export interface MaterialChunk {
   id: string;
   content: string;
   source: string;
-  page: number;
-  section: string;
+  page?: number;
+  section?: string;
   topic: string;
 }
 
