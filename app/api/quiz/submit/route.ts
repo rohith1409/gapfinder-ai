@@ -223,7 +223,10 @@ export async function POST(request: NextRequest) {
           : { ...topic, previousScore, improvement: topic.score - previousScore };
       });
     }
-    const revisionPlan = generateRevisionPlan(profile, gapReport, previousTasks);
+    const revisionPlan = generateRevisionPlan(profile, gapReport, previousTasks).map((task) => ({
+      ...task,
+      id: crypto.randomUUID(),
+    }));
 
     if (client) {
       const { data: attempt, error: attemptError } = await client.from("quiz_attempts").insert({
@@ -272,6 +275,7 @@ export async function POST(request: NextRequest) {
       }).select("id").single();
       if (planError || !plan) throw new ApiError(`Analysis was saved but revision plan could not be saved: ${planError?.message ?? "No plan id returned."}`, 502);
       const { error: tasksError } = await client.from("revision_tasks").insert(revisionPlan.map((task) => ({
+        id: task.id,
         plan_id: plan.id,
         user_id: userId,
         day: task.day,
