@@ -49,7 +49,7 @@ npm install
 cp .env.example .env.local
 ```
 
-3. Fill in the required values for Supabase and Groq.
+3. Optionally add a `GROQ_API_KEY` to enable Groq-backed answers. Without it, the app uses its grounded retrieval fallback. `GROQ_MODEL` is optional and defaults to `llama-3.3-70b-versatile`.
 
 4. Start the app:
 
@@ -106,11 +106,10 @@ npm run build
 
 ## Vercel deployment
 
-1. Push the repository to GitHub.
-2. Import the project into Vercel.
-3. Add the environment variables from `.env.example`.
-4. Set the build command to `npm run build`.
-5. Deploy and verify the production build.
+1. Import `rohith1409/gapfinder-ai` into Vercel.
+2. Keep the framework preset as **Next.js**, the root directory as the repository root, and the build command as `npm run build` (Vercel's default).
+3. No environment variables are required for the demo. Optionally set `GROQ_API_KEY` and `GROQ_MODEL` in the Vercel project settings to enable Groq-backed answers; never set example placeholder values from `.env.example`.
+4. Deploy and verify the generated Vercel URL.
 
 ## Limitations
 
