@@ -5,7 +5,7 @@ import { FileText, Trash2, UploadCloud } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { chunkText, defaultMaterials, extractTextFromFile, saveToStorage } from "@/lib/logic";
 import type { StudyMaterial } from "@/lib/types";
-import { apiFetch, isSupabaseConfigured } from "@/lib/browser-api";
+import { apiFetch, getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/browser-api";
 import { useLocalStorageValue } from "@/lib/use-storage";
 
 export default function MaterialsPage() {
@@ -38,26 +38,52 @@ export default function MaterialsPage() {
           throw new Error(`${file.name} exceeds the ${maxUploadMb} MB upload limit.`);
         }
         if (!/\.(pdf|txt)$/i.test(file.name)) throw new Error(`${file.name} is not a supported PDF or TXT file.`);
-        const text = await extractTextFromFile(file);
-        const chunks = chunkText(text, file.name.replace(/\.[^/.]+$/, ""), file.name);
-        if (!chunks.length) throw new Error(`No readable text was extracted from ${file.name}.`);
-        if (chunks.length > 2000) throw new Error(`${file.name} produced more than 2,000 chunks. Split the document before uploading.`);
+        const type = file.name.toLowerCase().endsWith(".pdf") ? "pdf" : "txt";
         const material: StudyMaterial = {
           id: crypto.randomUUID(),
           name: file.name,
-          type: file.name.toLowerCase().endsWith(".pdf") ? "pdf" : "txt",
+          type,
           uploadDate: new Date().toISOString(),
-          status: "processed",
+          status: "pending",
           size: file.size,
-          text,
-          chunks,
+          text: "",
+          chunks: [],
         };
         if (isSupabaseConfigured()) {
-          const saved = await apiFetch<{ id: string }>("/api/materials", {
-            method: "POST",
-            body: JSON.stringify(material),
+          const supabase = getSupabaseBrowserClient();
+          const { data: userData, error: userError } = await supabase.auth.getUser();
+          if (userError) throw userError;
+          if (!userData.user) throw new Error("Sign in before uploading study materials.");
+          const safeName = file.name.replace(/[^A-Za-z0-9._-]/g, "_");
+          const storagePath = `${userData.user.id}/${crypto.randomUUID()}/${safeName}`;
+          const { error: uploadError } = await supabase.storage.from("study-materials").upload(storagePath, file, {
+            contentType: type === "pdf" ? "application/pdf" : "text/plain",
+            upsert: false,
           });
-          material.id = saved.id;
+          if (uploadError) throw uploadError;
+
+          try {
+            const saved = await apiFetch<{ id: string; chunkCount: number }>("/api/materials", {
+              method: "POST",
+              body: JSON.stringify({ name: file.name, type, storagePath }),
+            });
+            material.id = saved.id;
+            material.status = "processed";
+            material.chunkCount = saved.chunkCount;
+          } catch (cause) {
+            const { error: cleanupError } = await supabase.storage.from("study-materials").remove([storagePath]);
+            if (cleanupError) console.error("Could not remove failed document upload:", cleanupError.message);
+            throw cause;
+          }
+        } else {
+          const text = await extractTextFromFile(file);
+          const chunks = chunkText(text, file.name.replace(/\.[^/.]+$/, ""), file.name);
+          if (!chunks.length) throw new Error(`No readable text was extracted from ${file.name}.`);
+          if (chunks.length > 2000) throw new Error(`${file.name} produced more than 2,000 chunks. Split the document before uploading.`);
+          material.status = "processed";
+          material.text = text;
+          material.chunks = chunks;
+          material.chunkCount = chunks.length;
         }
         processed.push(material);
       }
@@ -121,7 +147,7 @@ export default function MaterialsPage() {
             <p className="mt-2 text-sm text-slate-500">{new Date(material.uploadDate).toLocaleDateString()} · {Math.round(material.size / 1024)} KB</p>
             <div className="mt-4 flex items-center justify-between text-sm">
               <span className="rounded-full bg-emerald-100 px-2 py-1 font-medium text-emerald-700">{material.status}</span>
-              <span className="text-slate-500">{material.chunks.length} chunks</span>
+              <span className="text-slate-500">{material.chunkCount ?? material.chunks.length} chunks</span>
             </div>
           </div>
         ))}

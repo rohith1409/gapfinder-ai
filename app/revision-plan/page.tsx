@@ -26,7 +26,6 @@ export default function RevisionPlanPage() {
     apiFetch<{ tasks: RevisionTask[] }>("/api/revision-plan")
       .then(({ tasks: cloudTasks }) => {
         setCloudTasks(cloudTasks);
-        saveToStorage("revision-plan", cloudTasks);
       })
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Could not load revision plan."));
   }, []);
@@ -42,7 +41,7 @@ export default function RevisionPlanPage() {
       }
       const updated = tasks.map((item) => item.id === task.id ? { ...item, completed: !item.completed } : item);
       if (isSupabaseConfigured()) setCloudTasks(updated);
-      saveToStorage("revision-plan", updated);
+      else saveToStorage("revision-plan", updated);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not update revision task.");
     }

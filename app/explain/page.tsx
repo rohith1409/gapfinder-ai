@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { getDemoMaterials } from "@/lib/logic";
 import type { ChatMessage, StudyMaterial } from "@/lib/types";
@@ -8,12 +8,23 @@ import { apiFetch, isSupabaseConfigured } from "@/lib/browser-api";
 
 export default function ExplainPage() {
   const [question, setQuestion] = useState("What is meiosis and why is it important?");
-  const [materials] = useState<StudyMaterial[]>(() => getDemoMaterials());
+  const [materials] = useState<StudyMaterial[]>(() => isSupabaseConfigured() ? [] : getDemoMaterials());
   const [loading, setLoading] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(isSupabaseConfigured());
   const [error, setError] = useState("");
   const [history, setHistory] = useState<ChatMessage[]>([
     { id: "intro", role: "assistant", text: "Ask me about a topic covered in your uploaded study materials." },
   ]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    apiFetch<{ messages: ChatMessage[] }>("/api/rag")
+      .then(({ messages }) => setHistory(messages.length ? messages : [
+        { id: "intro", role: "assistant", text: "Ask me about a topic covered in your uploaded study materials." },
+      ]))
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Could not load assistant history."))
+      .finally(() => setLoadingHistory(false));
+  }, []);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -23,7 +34,10 @@ export default function ExplainPage() {
       const answer = isSupabaseConfigured()
         ? await apiFetch<{ answer: string; citations: ChatMessage["citations"] }>("/api/rag", {
           method: "POST",
-          body: JSON.stringify({ question }),
+          body: JSON.stringify({
+            question,
+            history: history.filter((message) => message.id !== "intro").slice(-8).map(({ role, text }) => ({ role, text })),
+          }),
         })
         : await apiFetch<{ answer: string; citations: ChatMessage["citations"] }>("/api/rag", {
           method: "POST",
@@ -34,6 +48,7 @@ export default function ExplainPage() {
         { id: `user-${crypto.randomUUID()}`, role: "user", text: question },
         { id: `assistant-${crypto.randomUUID()}`, role: "assistant", text: answer.answer, citations: answer.citations },
       ]);
+      setQuestion("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The assistant could not answer this question.");
     } finally {
@@ -47,7 +62,7 @@ export default function ExplainPage() {
         <form onSubmit={handleSubmit} className="space-y-4">
           <label className="block text-sm font-medium text-slate-700">Ask about your uploaded material</label>
           <textarea value={question} onChange={(event) => setQuestion(event.target.value)} rows={3} className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 outline-none focus:border-indigo-400" />
-          <button type="submit" disabled={loading} className="rounded-full bg-indigo-600 px-5 py-3 font-semibold text-white disabled:opacity-60">{loading ? "Searching materials…" : "Ask assistant"}</button>
+          <button type="submit" disabled={loading || loadingHistory || !question.trim()} className="rounded-full bg-indigo-600 px-5 py-3 font-semibold text-white disabled:opacity-60">{loading ? "Searching materials…" : loadingHistory ? "Loading conversation…" : "Ask assistant"}</button>
           {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
         </form>
 

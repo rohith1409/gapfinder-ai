@@ -31,7 +31,6 @@ export default function SignupPage() {
           return;
         }
         if (!data.user) throw new Error("Supabase did not return the created user.");
-        saveToStorage("profile", { ...defaultProfile, id: data.user.id, email: data.user.email ?? form.email, fullName: form.fullName });
       } else {
         saveToStorage("profile", { ...defaultProfile, ...form });
       }

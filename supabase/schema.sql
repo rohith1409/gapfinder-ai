@@ -1,5 +1,18 @@
 create extension if not exists vector;
 
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'study-materials',
+  'study-materials',
+  false,
+  10485760,
+  array['application/pdf', 'text/plain']
+)
+on conflict (id) do update
+set public = excluded.public,
+    file_size_limit = excluded.file_size_limit,
+    allowed_mime_types = excluded.allowed_mime_types;
+
 create table if not exists profiles (
   id uuid primary key,
   full_name text not null,
@@ -46,6 +59,7 @@ create table if not exists topics (
   name text not null,
   parent_topic_id uuid references topics(id) on delete set null,
   exam_importance integer not null default 50 check (exam_importance between 0 and 100),
+  source_documents text[] not null default '{}'::text[],
   created_at timestamptz not null default now()
 );
 
@@ -151,11 +165,19 @@ alter table student_answers add column if not exists question_data jsonb;
 alter table topic_performance add column if not exists quiz_attempt_id uuid references quiz_attempts(id) on delete cascade;
 alter table topic_performance add column if not exists previous_score numeric;
 alter table topic_performance add column if not exists improvement numeric;
+alter table topic_performance add column if not exists details jsonb;
 alter table revision_plans add column if not exists quiz_attempt_id uuid references quiz_attempts(id) on delete set null;
+alter table topics add column if not exists source_documents text[] not null default '{}'::text[];
 
 create index if not exists idx_documents_user_created on documents(user_id, created_at desc);
 create index if not exists idx_document_chunks_user_document on document_chunks(user_id, document_id);
 create index if not exists idx_topics_user_id on topics(user_id);
+delete from topics duplicate
+using topics keeper
+where duplicate.user_id = keeper.user_id
+  and lower(duplicate.name) = lower(keeper.name)
+  and duplicate.id > keeper.id;
+create unique index if not exists idx_topics_user_name on topics(user_id, name);
 create index if not exists idx_quiz_attempts_user_created on quiz_attempts(user_id, created_at desc);
 create index if not exists idx_revision_tasks_plan_id on revision_tasks(user_id, plan_id);
 create index if not exists idx_document_chunks_embedding on document_chunks using hnsw (embedding vector_cosine_ops);
@@ -172,6 +194,12 @@ alter table topic_performance enable row level security;
 alter table revision_plans enable row level security;
 alter table revision_tasks enable row level security;
 alter table chat_history enable row level security;
+
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on
+  profiles, documents, document_chunks, topics, questions, quizzes, quiz_attempts,
+  student_answers, topic_performance, revision_plans, revision_tasks, chat_history
+to authenticated;
 
 drop policy if exists "Users can view their own profiles" on profiles;
 drop policy if exists "Users can update their own profiles" on profiles;
@@ -199,6 +227,30 @@ begin
   end loop;
 end
 $$;
+
+drop policy if exists "Students can access their private study files" on storage.objects;
+create policy "Students can access their private study files"
+on storage.objects for select to authenticated
+using (
+  bucket_id = 'study-materials'
+  and (storage.foldername(name))[1] = auth.uid()::text
+);
+
+drop policy if exists "Students can upload their private study files" on storage.objects;
+create policy "Students can upload their private study files"
+on storage.objects for insert to authenticated
+with check (
+  bucket_id = 'study-materials'
+  and (storage.foldername(name))[1] = auth.uid()::text
+);
+
+drop policy if exists "Students can delete their private study files" on storage.objects;
+create policy "Students can delete their private study files"
+on storage.objects for delete to authenticated
+using (
+  bucket_id = 'study-materials'
+  and (storage.foldername(name))[1] = auth.uid()::text
+);
 
 drop function if exists match_document_chunks(vector, float, int, uuid);
 
@@ -236,3 +288,5 @@ as $$
   order by dc.embedding <=> query_embedding
   limit greatest(1, least(match_count, 20));
 $$;
+
+grant execute on function match_document_chunks(vector, float, int, uuid[], text) to authenticated;

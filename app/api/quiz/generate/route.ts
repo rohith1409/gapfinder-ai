@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { ApiError, callGroq, embedTexts, getUserSupabase, isCloudBackendConfigured, jsonError, requireEmbeddingConfig } from "@/lib/server/backend";
 import { defaultTopics } from "@/lib/mock-data";
 import type { Quiz, QuizQuestion, SourceCitation } from "@/lib/types";
+import { toQuizPreview } from "@/lib/quiz-preview";
 
 const requestSchema = z.object({
   difficulty: z.enum(["Easy", "Medium", "Hard"]),
@@ -139,10 +140,23 @@ export async function POST(request: NextRequest) {
         questions,
       });
       if (error) throw new ApiError(`Could not save generated quiz: ${error.message}`, 502);
+      const topicNames = [...new Set(questions.map((question) => question.topic.trim()))];
+      const topicRows = topicNames.map((name) => ({
+        user_id: userId,
+        name,
+        exam_importance: defaultTopics.find((topic) => topic.name.toLowerCase() === name.toLowerCase())?.importance ?? 50,
+        source_documents: [...new Set(questions
+          .filter((question) => question.topic.trim() === name)
+          .flatMap((question) => question.citations.map((citation) => citation.source)))],
+      }));
+      const { error: topicError } = await client.from("topics").upsert(topicRows, {
+        onConflict: "user_id,name",
+      });
+      if (topicError) throw new ApiError(`The quiz was saved, but identified topics could not be saved: ${topicError.message}`, 502);
     }
 
     const importance = Object.fromEntries(defaultTopics.map((topic) => [topic.name, topic.importance]));
-    return Response.json({ quiz, mode: client ? "cloud" : "demo", importance }, { status: 201 });
+    return Response.json({ quiz: client ? toQuizPreview(quiz) : quiz, mode: client ? "cloud" : "demo", importance }, { status: 201 });
   } catch (error) {
     return jsonError(error);
   }

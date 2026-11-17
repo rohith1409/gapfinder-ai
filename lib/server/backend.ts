@@ -10,7 +10,7 @@ export class ApiError extends Error {
 }
 
 export function isCloudBackendConfigured() {
-  return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+  return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 }
 
 export function requireEmbeddingConfig() {
@@ -20,6 +20,9 @@ export function requireEmbeddingConfig() {
 }
 
 export async function getUserSupabase(request: NextRequest): Promise<{ client: SupabaseClient; user: User }> {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+    throw new ApiError("Supabase configuration is incomplete. Set both NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.", 503);
+  }
   const authorization = request.headers.get("authorization");
   const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
   if (!token) throw new ApiError("Sign in to use your private study data.", 401);
@@ -56,11 +59,18 @@ async function embedBatch(texts: string[]): Promise<number[][]> {
       Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ model: "text-embedding-3-small", dimensions: 1536, input: texts }),
+    body: JSON.stringify({
+      model: process.env.OPENAI_EMBEDDING_MODEL ?? "text-embedding-3-small",
+      dimensions: 1536,
+      input: texts,
+    }),
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) {
     const detail = await response.text();
+    if (response.status === 429) {
+      throw new ApiError("The embedding provider is rate-limiting requests. Please retry shortly.", 503);
+    }
     throw new ApiError(`Embedding provider returned ${response.status}: ${detail.slice(0, 300)}`, 502);
   }
   const payload = await response.json() as { data?: Array<{ index: number; embedding: number[] }> };
@@ -99,6 +109,9 @@ export async function callGroq<T>(system: string, prompt: string): Promise<T> {
   });
   if (!response.ok) {
     const detail = await response.text();
+    if (response.status === 429) {
+      throw new ApiError("Groq is rate-limiting requests. Please retry shortly.", 503);
+    }
     throw new ApiError(`Groq returned ${response.status}: ${detail.slice(0, 300)}`, 502);
   }
 

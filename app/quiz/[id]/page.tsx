@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { buildGapReport, evaluateQuestion, generateRevisionPlan, getDemoProfile, loadFromStorage, saveToStorage } from "@/lib/logic";
@@ -22,10 +22,20 @@ function QuizAttemptPageContent() {
   const { id: quizId } = useParams<{ id: string }>();
   const history = useLocalStorageValue<Quiz[]>("quiz-history", []);
   const currentQuiz = useLocalStorageValue<Quiz | null>("current-quiz", null);
-  const quiz = history.find((item) => item.id === quizId) ?? currentQuiz;
+  const [cloudQuiz, setCloudQuiz] = useState<Quiz | null>(null);
+  const [loadingQuiz, setLoadingQuiz] = useState(isSupabaseConfigured());
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const quiz = isSupabaseConfigured() ? cloudQuiz : history.find((item) => item.id === quizId) ?? currentQuiz;
+
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    apiFetch<{ quiz: Quiz }>(`/api/quiz/${encodeURIComponent(quizId)}`)
+      .then(({ quiz }) => setCloudQuiz(quiz))
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Could not load this quiz."))
+      .finally(() => setLoadingQuiz(false));
+  }, [quizId]);
 
   const submit = async () => {
     if (!quiz) return;
@@ -33,14 +43,11 @@ function QuizAttemptPageContent() {
     setError("");
     try {
       if (isSupabaseConfigured()) {
-        const result = await apiFetch<{ responses: ReturnType<typeof evaluateQuestion>[]; gapReport: ReturnType<typeof buildGapReport>; revisionPlan: unknown[] }>(
+        const result = await apiFetch<{ responses: ReturnType<typeof evaluateQuestion>[]; gapReport: ReturnType<typeof buildGapReport>; attemptId: string }>(
           "/api/quiz/submit",
           { method: "POST", body: JSON.stringify({ quizId: quiz.id, answers }) },
         );
-        saveToStorage("latest-gap-report", result.gapReport);
-        saveToStorage("latest-answers", result.responses);
-        saveToStorage("latest-quiz", quiz);
-        saveToStorage("revision-plan", result.revisionPlan);
+        if (!result.attemptId) throw new Error("The server did not confirm that the quiz attempt was saved.");
       } else {
         const responses = quiz.questions.map((question) => evaluateQuestion(question, answers[question.id] ?? ""));
         const previousReport = loadFromStorage<TopicPerformance[]>("latest-gap-report", []);
@@ -75,12 +82,19 @@ function QuizAttemptPageContent() {
 
   return (
     <AppShell title="Take quiz">
-      {quiz ? (
+      {loadingQuiz ? (
+        <p role="status" className="text-sm text-slate-500">Loading your saved quiz…</p>
+      ) : quiz ? (
         <div className="space-y-6">
           {quiz.questions.map((question, index) => (
             <div key={question.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-3 text-sm font-semibold uppercase tracking-[0.2em] text-indigo-600">Q{index + 1} · {question.topic}</div>
               <h3 className="text-lg font-semibold">{question.text}</h3>
+              {question.citations.length > 0 && (
+                <p className="mt-2 text-xs text-slate-500">
+                  Sources: {question.citations.map((citation) => `${citation.source}${citation.page ? ` (p.${citation.page})` : ""}${citation.section ? ` — ${citation.section}` : ""}`).join("; ")}
+                </p>
+              )}
               <div className="mt-4 space-y-3">
                 {question.type === "multiple-choice" && question.options ? question.options.map((option) => (
                   <label key={option} className="flex cursor-pointer items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -113,7 +127,7 @@ function QuizAttemptPageContent() {
           </div>
         </div>
       ) : (
-        <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-8 text-center text-slate-500">No active quiz found. Generate one from the quiz page.</div>
+        <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-8 text-center text-slate-500">{error || "No active quiz found. Generate one from the quiz page."}</div>
       )}
     </AppShell>
   );

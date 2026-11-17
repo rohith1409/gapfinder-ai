@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { BookOpenText, GraduationCap, LayoutDashboard, LogOut, MessageSquareText, PencilLine, Sparkles, UploadCloud } from "lucide-react";
+import { useEffect, useState } from "react";
+import { BookOpenText, GraduationCap, LayoutDashboard, LogOut, MessageSquareText, PencilLine, Settings, Sparkles, UploadCloud } from "lucide-react";
 import { defaultProfile } from "@/lib/logic";
-import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/browser-api";
+import { apiFetch, getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/browser-api";
 import { useLocalStorageValue } from "@/lib/use-storage";
 import type { StudentProfile } from "@/lib/types";
 
@@ -17,12 +17,22 @@ const navItems = [
   { href: "/revision-plan", label: "Revision", icon: Sparkles },
   { href: "/explain", label: "Explain", icon: MessageSquareText },
   { href: "/progress", label: "Progress", icon: GraduationCap },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function AppShell({ children, title }: { children: React.ReactNode; title: string }) {
   const router = useRouter();
-  const profile = useLocalStorageValue<StudentProfile | null>("profile", defaultProfile);
+  const demoProfile = useLocalStorageValue<StudentProfile | null>("profile", defaultProfile);
+  const [cloudProfile, setCloudProfile] = useState<StudentProfile | null>(null);
+  const profile = isSupabaseConfigured() ? cloudProfile : demoProfile;
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    apiFetch<StudentProfile>("/api/profile")
+      .then(setCloudProfile)
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Could not load your profile."));
+  }, []);
 
   const handleLogout = async () => {
     setError("");
@@ -65,6 +75,9 @@ export function AppShell({ children, title }: { children: React.ReactNode; title
           </nav>
 
           <div className="flex items-center gap-3">
+            <div className={`hidden rounded-full px-3 py-1 text-xs font-semibold sm:block ${isSupabaseConfigured() ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>
+              {isSupabaseConfigured() ? "Cloud account" : "Demo mode · local only"}
+            </div>
             <div className="hidden rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-sm font-medium text-slate-700 sm:block">
               {profile?.fullName ?? "Student"}
             </div>

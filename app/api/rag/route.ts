@@ -7,6 +7,10 @@ const bodySchema = z.object({
   question: z.string().trim().min(3).max(2000),
   documentIds: z.array(z.string().uuid()).max(100).optional(),
   topic: z.string().trim().min(1).max(200).optional(),
+  history: z.array(z.object({
+    role: z.enum(["user", "assistant"]),
+    text: z.string().trim().min(1).max(2000),
+  })).max(12).optional(),
   materials: z.array(z.object({
     name: z.string(),
     chunks: z.array(z.object({
@@ -50,7 +54,8 @@ export async function POST(request: NextRequest) {
       const auth = await getUserSupabase(request);
       client = auth.client;
       userId = auth.user.id;
-      const [embedding] = await embedTexts([payload.question]);
+      const recentContext = (payload.history ?? []).filter((message) => message.role === "user").slice(-3).map((message) => message.text).join("\n");
+      const [embedding] = await embedTexts([recentContext ? `${recentContext}\n${payload.question}` : payload.question]);
       const { data, error } = await client.rpc("match_document_chunks", {
         query_embedding: embedding,
         match_threshold: 0.25,
@@ -124,7 +129,7 @@ export async function POST(request: NextRequest) {
 
     const generatedResult = answerSchema.safeParse(await callGroq<unknown>(
       "Answer using only supplied evidence. If it is insufficient, say so and return no citation ids. Return JSON with answer and citationIds. Only cite supplied chunk ids.",
-      `Question: ${payload.question}\nEvidence chunks:\n${JSON.stringify(evidence.slice(0, 5).map(({ id, content, source, page, section }) => ({ id, content, source, page, section })))}`,
+      `Conversation history is for resolving follow-up references only; it is not evidence. Use only the source chunks below for factual claims.\nConversation history: ${JSON.stringify((payload.history ?? []).slice(-6))}\nQuestion: ${payload.question}\nEvidence chunks:\n${JSON.stringify(evidence.slice(0, 5).map(({ id, content, source, page, section }) => ({ id, content, source, page, section })))}`,
     ));
     if (!generatedResult.success) throw new ApiError("The AI returned an invalid answer or citation list.", 502);
     const generated = generatedResult.data;
@@ -149,6 +154,27 @@ export async function POST(request: NextRequest) {
       if (error) throw new ApiError(`Could not save assistant conversation: ${error.message}`, 502);
     }
     return Response.json(result);
+  } catch (error) {
+    return jsonError(error);
+  }
+}
+
+export async function GET(request: NextRequest) {
+  try {
+    if (!isCloudBackendConfigured()) return Response.json({ mode: "demo", messages: [] });
+    const { client, user } = await getUserSupabase(request);
+    const { data, error } = await client
+      .from("chat_history")
+      .select("id,question,answer,citations,created_at")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(20);
+    if (error) throw new ApiError(`Could not load assistant history: ${error.message}`, 502);
+    const messages = (data ?? []).reverse().flatMap((row) => [
+      { id: `${row.id}-user`, role: "user" as const, text: row.question },
+      { id: `${row.id}-assistant`, role: "assistant" as const, text: row.answer, citations: row.citations },
+    ]);
+    return Response.json({ mode: "cloud", messages });
   } catch (error) {
     return jsonError(error);
   }

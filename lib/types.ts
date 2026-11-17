@@ -91,6 +91,7 @@ export interface StudyMaterial {
   size: number;
   text: string;
   chunks: MaterialChunk[];
+  chunkCount?: number;
 }
 
 export interface RevisionTask {

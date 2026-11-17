@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BarChart3, BookOpen, CircleDashed, PencilLine, TrendingUp } from "lucide-react";
+import { BarChart3, BookOpen, PencilLine, TrendingUp } from "lucide-react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { AppShell } from "@/components/app-shell";
 import { defaultMaterials } from "@/lib/logic";
@@ -15,6 +15,11 @@ type DashboardData = {
   totalQuizzes: number;
   overall: number | null;
   weakTopics: number;
+  mediumTopics: number;
+  strongTopics: number;
+  totalTopics: number;
+  revisionCompleted: number;
+  revisionTotal: number;
   latestTopics: Array<Pick<TopicPerformance, "topic" | "score" | "status" | "diagnosis" | "recommendedAction">>;
   recentAttempts: Attempt[];
   trend: Array<{ name: string; score: number }>;
@@ -32,6 +37,11 @@ export default function DashboardPage() {
     totalQuizzes: attempts.length,
     overall: attempts.length ? Math.round(attempts.reduce((sum, attempt) => sum + attempt.score, 0) / attempts.length) : null,
     weakTopics: topics.filter((topic) => topic.status === "Weak").length,
+    mediumTopics: topics.filter((topic) => topic.status === "Medium").length,
+    strongTopics: topics.filter((topic) => topic.status === "Strong").length,
+    totalTopics: topics.length,
+    revisionCompleted: tasks.filter((task) => task.completed).length,
+    revisionTotal: tasks.length,
     latestTopics: topics,
     recentAttempts: attempts.slice(0, 10),
     trend: attempts.slice(0, 10).reverse().map((attempt, index) => ({ name: `Attempt ${index + 1}`, score: attempt.score })),
@@ -44,6 +54,11 @@ export default function DashboardPage() {
     totalQuizzes: 0,
     overall: null,
     weakTopics: 0,
+    mediumTopics: 0,
+    strongTopics: 0,
+    totalTopics: 0,
+    revisionCompleted: 0,
+    revisionTotal: 0,
     latestTopics: [],
     recentAttempts: [],
     trend: [],
@@ -61,12 +76,11 @@ export default function DashboardPage() {
   return (
     <AppShell title="Dashboard">
       {error && <p role="alert" className="mb-4 text-sm text-red-600">{error}</p>}
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {[
           { label: "Study materials", value: data.totalMaterials, icon: BookOpen, className: "bg-indigo-100 text-indigo-700" },
           { label: "Quizzes completed", value: data.totalQuizzes, icon: PencilLine, className: "bg-sky-100 text-sky-700" },
           { label: "Overall performance", value: data.overall === null ? "—" : `${data.overall}%`, icon: TrendingUp, className: "bg-emerald-100 text-emerald-700" },
-          { label: "Weak topics", value: data.weakTopics, icon: CircleDashed, className: "bg-red-100 text-red-700" },
         ].map(({ label, value, icon: Icon, className }) => (
           <div key={label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between">
@@ -78,6 +92,31 @@ export default function DashboardPage() {
             <div className="mt-4 text-3xl font-bold text-slate-900">{value}</div>
           </div>
         ))}
+      </div>
+      <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {[
+          { label: "Topics identified", value: data.totalTopics },
+          { label: "Weak topics", value: data.weakTopics },
+          { label: "Medium topics", value: data.mediumTopics },
+          { label: "Strong topics", value: data.strongTopics },
+        ].map(({ label, value }) => (
+          <div key={label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="text-sm font-medium text-slate-500">{label}</div>
+            <div className="mt-3 text-2xl font-bold text-slate-900">{value}</div>
+          </div>
+        ))}
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:col-span-2 xl:col-span-4">
+          <div className="flex items-center justify-between text-sm font-medium text-slate-600">
+            <span>Current revision plan completion</span>
+            <span>{data.revisionCompleted}/{data.revisionTotal} tasks</span>
+          </div>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+            <div
+              className="h-full rounded-full bg-indigo-600 transition-all"
+              style={{ width: `${data.revisionTotal ? Math.round(data.revisionCompleted / data.revisionTotal * 100) : 0}%` }}
+            />
+          </div>
+        </div>
       </div>
 
       <div className="mt-8 grid gap-6 xl:grid-cols-[1.5fr_0.8fr]">

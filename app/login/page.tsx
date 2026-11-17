@@ -25,12 +25,6 @@ export default function LoginPage() {
         const { data, error: authError } = await getSupabaseBrowserClient().auth.signInWithPassword({ email: email.trim(), password });
         if (authError) throw authError;
         if (!data.user) throw new Error("Supabase did not return an authenticated user.");
-        saveToStorage("profile", {
-          ...defaultProfile,
-          id: data.user.id,
-          email: data.user.email ?? email.trim(),
-          fullName: data.user.user_metadata.full_name ?? email.trim().split("@")[0],
-        });
       } else {
         if (email.trim().toLowerCase() !== demoEmail || password !== demoPassword) {
           throw new Error("Use the demo email and password shown below.");

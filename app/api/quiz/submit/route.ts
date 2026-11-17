@@ -142,6 +142,9 @@ export async function POST(request: NextRequest) {
     if (client && !hasSourceContext) {
       throw new ApiError("The quiz source context is no longer available for grounded answer evaluation.", 422);
     }
+    if (client && !process.env.GROQ_API_KEY) {
+      throw new ApiError("Cloud answer evaluation requires GROQ_API_KEY. No score was generated or saved.", 503);
+    }
 
     if (process.env.GROQ_API_KEY && hasSourceContext) {
       const evalQuestions = quiz.questions.map((question) => ({
@@ -171,14 +174,25 @@ export async function POST(request: NextRequest) {
         if (!result) {
           throw new ApiError("The AI evaluation did not match the quiz questions.", 502);
         }
+        const answer = payload.answers[question.id] ?? "";
+        if (!answer.trim()) {
+          return {
+            questionId: question.id,
+            answer,
+            score: 0,
+            isCorrect: false,
+            feedback: "No answer was provided. Review the cited source material and try this concept again.",
+            correctAnswer: question.correctAnswer,
+          };
+        }
         const score = Math.round(result.score);
         return {
           questionId: question.id,
-          answer: payload.answers[question.id] ?? "",
+          answer,
           score,
           isCorrect: score >= 70,
           feedback: result.feedback,
-          correctAnswer: result.correctAnswer || question.correctAnswer,
+          correctAnswer: question.correctAnswer,
         };
       });
     } else {
@@ -223,7 +237,7 @@ export async function POST(request: NextRequest) {
           : { ...topic, previousScore, improvement: topic.score - previousScore };
       });
     }
-    const revisionPlan = generateRevisionPlan(profile, gapReport, previousTasks).map((task) => ({
+    const revisionPlan = generateRevisionPlan(profile, gapReport, previousTasks, new Date()).map((task) => ({
       ...task,
       id: crypto.randomUUID(),
     }));
@@ -264,6 +278,7 @@ export async function POST(request: NextRequest) {
         recommended_action: topic.recommendedAction,
         previous_score: topic.previousScore ?? null,
         improvement: topic.improvement ?? null,
+        details: topic,
       })));
       if (reportError) throw new ApiError(`Quiz and answers were saved but topic analysis could not be saved: ${reportError.message}`, 502);
 

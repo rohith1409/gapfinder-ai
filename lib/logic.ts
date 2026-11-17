@@ -94,15 +94,16 @@ export function chunkText(text: string, topic = "General", source = "Imported do
   const pages = text.split("\f");
   const chunks: MaterialChunk[] = [];
   let chunkIndex = 0;
+  const maxChunkLength = 800;
+  const overlapLength = 120;
 
   pages.forEach((pageText, pageIndex) => {
     const lines = pageText.split(/\r?\n/);
     let section = "";
-    let buffer: string[] = [];
-    let length = 0;
+    let buffer = "";
 
-    const flush = () => {
-      const content = buffer.join(" ").trim();
+    const flush = (overlap = false) => {
+      const content = buffer.trim();
       if (!content) return;
       chunkIndex += 1;
       chunks.push({
@@ -113,8 +114,49 @@ export function chunkText(text: string, topic = "General", source = "Imported do
         ...(section ? { section } : {}),
         topic,
       });
-      buffer = [];
-      length = 0;
+      if (overlap) {
+        const suffix = content.slice(-overlapLength);
+        const firstWord = suffix.indexOf(" ");
+        buffer = firstWord >= 0 ? suffix.slice(firstWord + 1) : suffix;
+      } else {
+        buffer = "";
+      }
+    };
+
+    const addSentence = (sentence: string) => {
+      const words = sentence.split(/\s+/);
+      let segment = "";
+      for (const word of words) {
+        if (word.length > maxChunkLength) {
+          if (segment) {
+            addSegment(segment);
+            segment = "";
+          }
+          for (let offset = 0; offset < word.length; offset += maxChunkLength) {
+            addSegment(word.slice(offset, offset + maxChunkLength));
+          }
+          continue;
+        }
+        const candidate = segment ? `${segment} ${word}` : word;
+        if (candidate.length > maxChunkLength) {
+          addSegment(segment);
+          segment = word;
+        } else {
+          segment = candidate;
+        }
+      }
+      if (segment) addSegment(segment);
+    };
+
+    const addSegment = (segment: string) => {
+      const candidate = buffer ? `${buffer} ${segment}` : segment;
+      if (candidate.length > maxChunkLength) {
+        flush(true);
+        const overlapped = buffer ? `${buffer} ${segment}` : segment;
+        buffer = overlapped.length <= maxChunkLength ? overlapped : segment;
+      } else {
+        buffer = candidate;
+      }
     };
 
     for (const rawLine of lines) {
@@ -125,14 +167,12 @@ export function chunkText(text: string, topic = "General", source = "Imported do
       }
       if (line.length < 100 && !/[.!?]$/.test(line)) {
         flush();
-        section = line.replace(/^#+\s*/, "");
+        section = line.replace(/^#{1,6}\s*/, "");
         continue;
       }
       const sentences = line.split(/(?<=[.!?])\s+/);
       for (const sentence of sentences) {
-        if (length + sentence.length > 800) flush();
-        buffer.push(sentence);
-        length += sentence.length;
+        addSentence(sentence);
       }
     }
     flush();
@@ -296,14 +336,23 @@ export function buildGapReport(quiz: Quiz, responses: StudentAnswer[]): TopicPer
   });
 }
 
-export function generateRevisionPlan(profile: StudentProfile, gapReport: TopicPerformance[], previousTasks: RevisionTask[] = []): RevisionTask[] {
+export function generateRevisionPlan(profile: StudentProfile, gapReport: TopicPerformance[], previousTasks: RevisionTask[] = [], currentDate?: Date): RevisionTask[] {
   const sorted = [...gapReport].sort((a, b) => {
     const priority = (topic: TopicPerformance) => ((topic.importance ?? 50) / 100) * (1 - topic.score / 100);
     return priority(b) - priority(a);
   });
 
   const tasks: RevisionTask[] = [];
-  sorted.slice(0, 5).forEach((topic, index) => {
+  const examTime = profile.examDate ? Date.parse(`${profile.examDate}T00:00:00Z`) : Number.NaN;
+  const todayTime = currentDate ? Date.parse(`${currentDate.toISOString().slice(0, 10)}T00:00:00Z`) : Number.NaN;
+  const daysUntilExam = Number.isFinite(examTime) && Number.isFinite(todayTime)
+    ? Math.max(1, Math.ceil((examTime - todayTime) / 86_400_000))
+    : 5;
+  const taskCount = Math.min(5, Math.max(1, profile.availableDays), daysUntilExam, sorted.length);
+  const taskDuration = taskCount
+    ? Math.max(15, Math.floor((profile.studyHoursPerDay * 60) / taskCount))
+    : 30;
+  sorted.slice(0, taskCount).forEach((topic, index) => {
     const weakest = [...topic.subtopics].sort((a, b) => a.score - b.score)[0];
     const subtopic = weakest?.name ?? "Foundational review";
     const existing = previousTasks.find((task) => task.topic === topic.topic && task.subtopic === subtopic);
@@ -312,7 +361,7 @@ export function generateRevisionPlan(profile: StudentProfile, gapReport: TopicPe
       day: index + 1,
       topic: topic.topic,
       subtopic,
-      duration: profile.studyHoursPerDay * 20,
+      duration: taskDuration,
       priority: topic.status === "Weak" ? "High" : topic.status === "Medium" ? "Medium" : "Low",
       activity: topic.recommendedAction,
       completed: existing?.completed ?? false,

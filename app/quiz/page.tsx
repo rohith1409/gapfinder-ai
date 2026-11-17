@@ -31,7 +31,7 @@ export default function QuizPage() {
         nextQuiz = generateQuizFromMaterials(materials, 4, difficulty as "Easy" | "Medium" | "Hard");
       }
       setGeneratedQuiz(nextQuiz);
-      saveToStorage("current-quiz", nextQuiz);
+      if (!isSupabaseConfigured()) saveToStorage("current-quiz", nextQuiz);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the quiz.");
     } finally {
@@ -40,7 +40,7 @@ export default function QuizPage() {
   };
 
   const startQuiz = () => {
-    if (quiz) saveToStorage("current-quiz", quiz);
+    if (quiz && !isSupabaseConfigured()) saveToStorage("current-quiz", quiz);
   };
 
   return (
@@ -79,6 +79,11 @@ export default function QuizPage() {
                   <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-indigo-600">{question.topic}</div>
                   <div className="font-medium">{question.text}</div>
                   <div className="mt-2 text-sm text-slate-500">{question.type} · {question.difficulty}</div>
+                  {question.citations.length > 0 && (
+                    <div className="mt-2 text-xs text-slate-500">
+                      Sources: {question.citations.map((citation) => `${citation.source}${citation.page ? ` (p.${citation.page})` : ""}${citation.section ? ` — ${citation.section}` : ""}`).join("; ")}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
